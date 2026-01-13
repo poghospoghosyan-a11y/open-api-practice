@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vehicle Recommendation Bot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<h1>🏍 Vehicle Recommendation Chatbot</h1>
+
+<div class="profile">
+    <input id="age" placeholder="Age">
+    <input id="height" placeholder="Height (cm)">
+    <input id="weight" placeholder="Weight (kg)">
+    <input id="experience" placeholder="Experience (beginner/intermediate/expert)">
+    <input id="use_case" placeholder="Use case (city/off-road/touring)">
+    <input id="budget" placeholder="Budget (USD)">
+    <input id="country" placeholder="Country">
+    <input id="preference" placeholder="Preference">
+</div>
+
+<div class="chat">
+    <div id="chat-box"></div>
+    <input id="message" placeholder="Ask your question...">
+    <button onclick="sendMessage()">Send</button>
+</div>
+
+<script>
+function sendMessage() {
+    const data = {
+        age: document.getElementById("age").value,
+        height: document.getElementById("height").value,
+        weight: document.getElementById("weight").value,
+        experience: document.getElementById("experience").value,
+        use_case: document.getElementById("use_case").value,
+        budget: document.getElementById("budget").value,
+        country: document.getElementById("country").value,
+        preference: document.getElementById("preference").value,
+        message: document.getElementById("message").value
+    };
+
+    fetch("/chat", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data)
+    })
+    .then(res => res.json())
+    .then(data => {
+        document.getElementById("chat-box").innerHTML +=
+            "<p><b>Bot:</b> " + data.reply + "</p>";
+    });
+}
+</script>
+
+</body>
+</html>
