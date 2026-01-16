@@ -3,11 +3,37 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from prompts import SYSTEM_PROMPT, build_prompt
 from rules import apply_rules
+from supabase import create_client
+import os
 
 load_dotenv()
 client = OpenAI()
+SUPABASE_URL=os.environ.get("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY=os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-app = Flask(__name__)
+
+
+app = Flask(__name__, static_folder="public", static_url_path="")
+client = OpenAI(api_key=os.environ.get("OPEN_API_KEY"))
+
+
+def embed_query(text: str) -> list[float]:
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+
+    return response.data[0].embedding
+
+def semantic_search(query_text: str) -> list[dict]:
+    emb_q = embed_query(query_text)
+    res = sb.rpc("match_chunks", {"query_embedding": emb_q, "match_count" : 5}).execute()
+    rows = res.data or []
+    #for easier debugging
+    print("RAG OUTPUT:", rows)
+    return rows
+
 
 @app.route("/")
 def index():
@@ -32,6 +58,31 @@ def chat():
     warnings = apply_rules(profile)
 
     prompt = build_prompt(profile, warnings, question)
+    
+    #conduct semantic search
+    rag_rows = semantic_search(prompt)
+
+    #fixes our formatting
+    context = "\n\n".join(
+        f"[Source {i+1} | sim={row.get('similarity'):.3f}]\n{row.get('content','')}"
+        for i, row in enumerate(rag_rows)
+    )
+
+    #create the rag prompt
+    rag_message = {
+        "role": "system",
+        "content": (
+            "Use the retrieved context below to answer. If it doesn't contain the answer, say so. \n\n"
+            f"RETRIEVED CONTEXT:\n{context if context else '(no matches)'}"
+        )
+    }
+
+    full_user_message = {
+        "role": "user",
+        "content": prompt,
+    }
+
+    full_message = [rag_message, full_user_message, SYSTEM_PROMPT]
 
     response = client.responses.create(
         model="gpt-5-nano",
