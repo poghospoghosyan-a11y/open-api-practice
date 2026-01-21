@@ -1,87 +1,92 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 from openai import OpenAI
-from prompts import SYSTEM_PROMPT, build_prompt
-from rules import apply_rules
 from supabase import create_client
 import os
 
-# Load environment variables
+print("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")
 load_dotenv()
-print("SUPABASE_URL =", os.getenv("FIRST_SUPABASE_URL"))
-print("CWD =", os.getcwd())
 
-
-# Create clients ONCE
-client = OpenAI()
-sb = create_client(
-    os.environ["FIRST_SUPABASE_URL"],
-    os.environ["FIRST_SUPABASE_SERVICE_ROLE_KEY"]
-)
+SUPABASE_URL=os.environ.get("FIRST_SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY=os.environ.get("FIRST_SUPABASE_SERVICE_ROLE_KEY")
+sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 app = Flask(__name__, static_folder="public", static_url_path="")
+client = OpenAI(api_key='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')
 
+
+SYSTEM_PROMPT = """
+You are a professional vehicle advisor.
+You recommend motorcycles, quads, or tricycles.
+You must prioritize safety, legality, experience level, and budget.
+Always explain your reasoning clearly.
+"""
+
+# takes in the string and outputs a vector
 def embed_query(text: str) -> list[float]:
     response = client.embeddings.create(
         model="text-embedding-3-small",
         input=text
     )
+
     return response.data[0].embedding
 
-def semantic_search(query_text: str) -> list[dict]:
+# takes as input a query, conducts the search, returns context
+def semantic_search(query_text) -> list[dict]:
     emb_q = embed_query(query_text)
-    res = sb.rpc(
-        "match_chunks",
-        {"query_embedding": emb_q, "match_count": 5}
-    ).execute()
-    return res.data or []
+    print("embedding complete")
 
-@app.route("/")
+    res = sb.rpc("match_chunks", {"query_embedding": emb_q, "match_count" : 5}).execute()
+    print(res)
+    rows = res.data or []
+    # for easier debugging
+    print("RAG OUTPUT:", rows)
+    return rows
+
+@app.get("/")
 def index():
-    return render_template("index.html")
+    return send_from_directory("public", "index.html")
 
-@app.route("/chat", methods=["POST"])
+@app.post("/api/chat")
 def chat():
-    data = request.json
+    data = request.get_json(silent=True) or {}
+    user_message = data.get("message", "")
 
-    profile = {
-        "age": data["age"],
-        "height": data["height"],
-        "weight": data["weight"],
-        "experience": data["experience"],
-        "use_case": data["use_case"],
-        "budget": data["budget"],
-        "country": data["country"],
-        "preference": data["preference"]
-    }
+    # conduct semantic search
+    rag_rows = semantic_search(user_message)
 
-    question = data["message"]
-    warnings = apply_rules(profile)
-    prompt = build_prompt(profile, warnings, question)
-
-    rag_rows = semantic_search(prompt)
-
+    # fixes our formatting
     context = "\n\n".join(
         f"[Source {i+1} | sim={row.get('similarity'):.3f}]\n{row.get('content','')}"
         for i, row in enumerate(rag_rows)
     )
 
-    response = client.responses.create(
-        model="gpt-5-nano",
-        input=[
-            {
-                "role": "system",
-                "content": (
-                    f"{SYSTEM_PROMPT}\n\n"
-                    "Use the retrieved context below.\n\n"
-                    f"RETRIEVED CONTEXT:\n{context or '(no matches)'}"
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-    )
+    # create the rag prompt
+    rag_message = {
+        "role": "system",
+        "content": (
+            "Use the retrieved context below to answer. If it doesn't contain the answer, say so. \n\n"
+            f"RETRIEVED CONTEXT:\n{context if context else '(no matches)'}"
+        )
+    }
 
-    return jsonify({"reply": response.output_text})
+    full_user_message = {
+        "role": "user",
+        "content": user_message,
+    }
+
+    full_message = [rag_message, full_user_message, SYSTEM_PROMPT]
+
+    resp = client.responses.create(
+        model="gpt-5-nano",
+        input=full_message
+    )
+    return jsonify({"text": resp.output_text})
+
+# Serves /styles.css, /app.js, etc.
+@app.get("/<path:path>")
+def static_files(path):
+    return send_from_directory("public", path)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="127.0.0.1", port=3000, debug=True)
